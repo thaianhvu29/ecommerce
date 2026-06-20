@@ -2,3 +2,9 @@
 # Local database backups
 backups/
 docker-compose.yml.broken
+
+# Local secrets
+/.env
+
+# Local secrets
+/.env
