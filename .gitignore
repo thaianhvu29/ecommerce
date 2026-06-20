@@ -1,0 +1,4 @@
+
+# Local database backups
+backups/
+docker-compose.yml.broken
