@@ -1,10 +1,10 @@
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
 
 # Local database backups
 backups/
+
+# Temporary or broken Compose files
 docker-compose.yml.broken
-
-# Local secrets
-/.env
-
-# Local secrets
-/.env
