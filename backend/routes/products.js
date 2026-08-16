@@ -3,6 +3,7 @@ const router = express.Router();
 const Product = require('../models/Product');
 const { protect, admin } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { uploadToS3 } = require('../s3');
 
 // @route   GET /api/products
 // @desc    Get all products with filters
@@ -13,33 +14,34 @@ router.get('/', async (req, res) => {
         const limit = parseInt(req.query.limit) || 12;
         const skip = (page - 1) * limit;
 
-        // Build query
         let query = { isActive: true };
 
-        // Category filter
         if (req.query.category) {
             query.category = req.query.category;
         }
 
-        // Price filter
         if (req.query.minPrice || req.query.maxPrice) {
             query.price = {};
-            if (req.query.minPrice) query.price.$gte = parseFloat(req.query.minPrice);
-            if (req.query.maxPrice) query.price.$lte = parseFloat(req.query.maxPrice);
+
+            if (req.query.minPrice) {
+                query.price.$gte = parseFloat(req.query.minPrice);
+            }
+
+            if (req.query.maxPrice) {
+                query.price.$lte = parseFloat(req.query.maxPrice);
+            }
         }
 
-        // Search
         if (req.query.search) {
             query.$text = { $search: req.query.search };
         }
 
-        // Rating filter
         if (req.query.rating) {
             query.rating = { $gte: parseFloat(req.query.rating) };
         }
 
-        // Build sort
         let sort = {};
+
         if (req.query.sort) {
             switch (req.query.sort) {
                 case 'price_asc':
@@ -88,7 +90,10 @@ router.get('/', async (req, res) => {
 // @access  Public
 router.get('/featured', async (req, res) => {
     try {
-        const products = await Product.find({ isFeatured: true, isActive: true })
+        const products = await Product.find({
+            isFeatured: true,
+            isActive: true
+        })
             .populate('category', 'name slug')
             .limit(8)
             .sort('-createdAt');
@@ -108,11 +113,16 @@ router.get('/:id', async (req, res) => {
             .populate('category', 'name slug')
             .populate({
                 path: 'reviews',
-                populate: { path: 'user', select: 'name avatar' }
+                populate: {
+                    path: 'user',
+                    select: 'name avatar'
+                }
             });
 
         if (!product) {
-            return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+            return res.status(404).json({
+                message: 'Sản phẩm không tồn tại'
+            });
         }
 
         res.json(product);
@@ -124,45 +134,81 @@ router.get('/:id', async (req, res) => {
 // @route   POST /api/products
 // @desc    Create product
 // @access  Private/Admin
-router.post('/', protect, admin, upload.array('images', 5), async (req, res) => {
-    try {
-        const productData = {
-            ...req.body,
-            images: req.files ? req.files.map(file => `/uploads/${file.filename}`) : []
-        };
+router.post(
+    '/',
+    protect,
+    admin,
+    upload.array('images', 5),
+    async (req, res) => {
+        try {
+            const imageUrls = req.files && req.files.length > 0
+                ? await Promise.all(
+                    req.files.map(file => uploadToS3(file))
+                )
+                : [];
 
-        const product = await Product.create(productData);
-        res.status(201).json(product);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
+            const productData = {
+                ...req.body,
+                images: imageUrls
+            };
+
+            const product = await Product.create(productData);
+
+            res.status(201).json(product);
+        } catch (error) {
+            console.error('Create product error:', error);
+
+            res.status(500).json({
+                message: error.message
+            });
+        }
     }
-});
+);
 
 // @route   PUT /api/products/:id
 // @desc    Update product
 // @access  Private/Admin
-router.put('/:id', protect, admin, upload.array('images', 5), async (req, res) => {
-    try {
-        const product = await Product.findById(req.params.id);
+router.put(
+    '/:id',
+    protect,
+    admin,
+    upload.array('images', 5),
+    async (req, res) => {
+        try {
+            const product = await Product.findById(req.params.id);
 
-        if (!product) {
-            return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+            if (!product) {
+                return res.status(404).json({
+                    message: 'Sản phẩm không tồn tại'
+                });
+            }
+
+            // Upload new images to S3
+            if (req.files && req.files.length > 0) {
+                const newImages = await Promise.all(
+                    req.files.map(file => uploadToS3(file))
+                );
+
+                req.body.images = [
+                    ...(product.images || []),
+                    ...newImages
+                ];
+            }
+
+            Object.assign(product, req.body);
+
+            await product.save();
+
+            res.json(product);
+        } catch (error) {
+            console.error('Update product error:', error);
+
+            res.status(500).json({
+                message: error.message
+            });
         }
-
-        // Handle new images
-        if (req.files && req.files.length > 0) {
-            const newImages = req.files.map(file => `/uploads/${file.filename}`);
-            req.body.images = [...(product.images || []), ...newImages];
-        }
-
-        Object.assign(product, req.body);
-        await product.save();
-
-        res.json(product);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
     }
-});
+);
 
 // @route   DELETE /api/products/:id
 // @desc    Delete product
@@ -172,13 +218,20 @@ router.delete('/:id', protect, admin, async (req, res) => {
         const product = await Product.findById(req.params.id);
 
         if (!product) {
-            return res.status(404).json({ message: 'Sản phẩm không tồn tại' });
+            return res.status(404).json({
+                message: 'Sản phẩm không tồn tại'
+            });
         }
 
         await product.deleteOne();
-        res.json({ message: 'Đã xóa sản phẩm' });
+
+        res.json({
+            message: 'Đã xóa sản phẩm'
+        });
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        res.status(500).json({
+            message: error.message
+        });
     }
 });
 

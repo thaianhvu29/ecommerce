@@ -2,30 +2,38 @@ const mongoose = require('mongoose');
 const User = require('./models/User');
 require('dotenv').config();
 
-const setAdmin = async () => {
+const email = process.argv[2];
+
+if (!email) {
+    console.error('Usage: node set-admin.js <email>');
+    process.exit(1);
+}
+
+async function setAdmin() {
     try {
         await mongoose.connect(process.env.MONGODB_URI);
-        console.log('✅ Connected to MongoDB');
+        console.log('Connected to MongoDB');
 
-        // Thay "fdgdg" bằng name hoặc email của bạn
-        const user = await User.findOne({ name: "fdgdg" });
+        const user = await User.findOne({ email });
 
         if (!user) {
-            console.log('❌ Không tìm thấy user. Thử tìm theo email:');
-            const allUsers = await User.find();
-            console.log('Danh sách users:', allUsers.map(u => ({ name: u.name, email: u.email })));
+            console.error(`User not found: ${email}`);
             process.exit(1);
         }
 
         user.role = 'admin';
         await user.save();
 
-        console.log('✅ Đã set role admin cho user:', user.name, '/', user.email);
-        process.exit(0);
+        console.log('Admin role granted successfully');
+        console.log('Name:', user.name);
+        console.log('Email:', user.email);
+        console.log('Role:', user.role);
+
+        await mongoose.disconnect();
     } catch (error) {
-        console.error('❌ Lỗi:', error);
+        console.error('Error:', error);
         process.exit(1);
     }
-};
+}
 
 setAdmin();
